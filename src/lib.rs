@@ -1,69 +1,87 @@
-mod model;
-
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
+#[allow(unused)]
+#[derive(Debug, PartialEq)]
+enum RESPValue {
+    SimpleStr(String),
+    Error(String),
+    Integer(i64),
+    Array(Vec<RESPValue>),
+    BulkStr(String)
 }
 
-#[allow(unused)]
-fn parse(msg: &str) -> Result<model::Type, &'static str> {
-    let mut result: Result<model::Type, &'static str> = Err("msg is empty");;
-    msg.split("\r\n").collect::<Vec<&str>>().split_first().and_then(|(first, rest)|{
-        let mut first_iter = first.chars();
-        result = match first_iter.next() {
-            Some(c) => match c {
-                '+' => Ok(model::Type::SimpleStr(first_iter.collect::<String>().to_string())),
-                _ => Err("unknow type")
-            },
-            None => Err("parse error")
-        };
-        Some(())
-    }).or_else(||{
-        result = Err("wrong syntax");
-        Some(())
+fn parse_type(msg: &str) -> Result<RESPValue, &'static str> {
+    let res = msg.find("\r\n").and_then(|i| -> Option<&str> {
+        msg.get(..i)
     });
 
-    result
+    if let Some(first) = res {
+        if let Some((first_char, rest)) = 
+            first.chars().next().map(|c| (c, &first[c.len_utf8()..])) {
+            match first_char {
+                '+' => Ok(RESPValue::SimpleStr(rest.to_string())),
+                '$' => {
+                    let n_r = rest.parse::<i32>();
+                    if let Some(n) = n_r.ok() {
+                        
+                    } else {
+                        return Err("invlid bulk string content");
+                    }
+                    return Ok(())
+                },
+                '*' => {
+                    
+                    Ok(())
+                }
+                _ => Err("unknow data type")
+            }
+        } else {
+            return Err("missing content");
+        }
+    } else {
+        return Err("missing CRLF");
+    }
+}
+
+fn parse_content(ch: char, rest: &str) -> Result<RESPValue, &'static str> {
+    match ch {
+        '+' => Ok(RESPValue::SimpleStr(rest.to_string())),
+        '$' => {
+            let n_r = rest.parse::<i32>();
+            if let Some(n) = n_r.ok() {
+
+            } else {
+                return Err("invlid bulk string content");
+            }
+            return Ok(())
+        }
+        _ => Err("unknow data type")
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::RESPValue;
 
     #[test]
     fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+        let msg = "+OK\r\n";
+        let res = msg.find("\r\n").and_then(|i: usize| ->Option<&str> {
+            msg.get(0..i)
+        });
+        assert_eq!(res, Some("+OK"));
+        
+        if let Some(first) = res {
+            if let Some((first_char, rest)) = 
+                first.chars().next().map(|c| (c, &first[c.len_utf8()..])) {
+                assert_eq!(first_char, '+');
+                assert_eq!(rest, "OK");
 
-    #[test]
-    fn test_print_chars() {
-        let s = String::from("我是夏铭杰");
-        let s_arr: Vec<char> = s.chars().collect();
-        assert_eq!(s_arr.len(), 5);
-        assert_eq!(s_arr[0], '我');
-        assert_eq!(s_arr[2], '夏');
-        assert_eq!(s_arr[4], '杰');
-    }
-
-    #[test]
-    fn parse_msg() {
-        let mut res = parse("+123\r\n");
-        assert_eq!(res, Ok(model::Type::SimpleStr("123".to_string())));
-
-        res = parse("msg");
-        assert_eq!(res, Err("wrong syntax"));
-
-        res = parse("-123\r\n");
-        assert_eq!(res, Err("unknow type"));
-    }
-
-    #[test]
-    fn test_iter_next() {
-        let v: Vec<i32> = vec![1,2,3,4,5];
-        let mut i = v.iter();
-        assert_eq!(i.next(), Some(&1));
-
-        let new_v: Vec<i32> = i.cloned().collect();
-        assert_eq!(new_v, vec![2,3,4,5]);
+                let t = match first_char {
+                    '+' => RESPValue::SimpleStr(rest.to_string()),
+                    '$' => 
+                    _ => RESPValue::Error("unknow data type".to_string())
+                };
+                assert_eq!(t, RESPValue::SimpleStr("OK".to_string()));
+            }
+        }
     }
 }
