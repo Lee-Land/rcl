@@ -11,11 +11,47 @@ mod resp;
 pub enum Error {
     Io(std::io::Error),
     Utf8Err(Utf8Error),
-    RespErr(String)
+    RespErr(String),
+}
+
+fn recv(conn: &mut TcpStream) -> Result<resp::Value, Error> {
+    let mut buffer = [0; 1024];
+    let mut utf8_buffer = Vec::new();
+    loop {
+        let read_ret = conn.read(&mut buffer);
+        let read_n: usize;
+        match read_ret {
+            Ok(n) => read_n = n,
+            Err(e) => return Err(Error::Io(e)),
+        }
+        if read_n == 0 {
+            break;
+        }
+        utf8_buffer.extend_from_slice(&buffer[..read_n]);
+    }
+
+    let back_ret = std::str::from_utf8(&utf8_buffer);
+    let back_str: String;
+    match back_ret {
+        Ok(ret) => back_str = ret.to_string(),
+        Err(e) => return Err(Error::Utf8Err(e)),
+    }
+
+    match resp::unpack(back_str) {
+        Ok(ret) => Ok(ret),
+        Err(e) => Err(Error::RespErr(e.to_string())),
+    }
+}
+
+fn send(conn: &mut TcpStream, req: resp::Value) -> Result<(), Error> {
+    match conn.write(resp::pack(req).as_bytes()) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(Error::Io(e)),
+    }
 }
 
 pub struct Client {
-    conn: TcpStream
+    conn: TcpStream,
 }
 
 impl Client {
@@ -26,50 +62,40 @@ impl Client {
             Ok(s) => stream = s,
             Err(e) => return Err(Error::Io(e)),
         }
-    
-        let command = resp::pack(resp::Value::Array(vec![resp::Value::BulkStr(
-            String::from("COMMAND"),
-        )]));
-        let write_ret = stream.write(command.as_bytes());
-        match write_ret {
-            Err(e) => return Err(Error::Io(e)),
+
+        let command = resp::Value::Array(vec![resp::Value::BulkStr(String::from("COMMAND"))]);
+        match send(&mut stream, command) {
+            Err(e) => return Err(e),
             Ok(_) => {}
         }
-    
-        let mut buffer = [0; 1024];
-        let mut utf8_buffer = Vec::new();
-        loop {
-            let read_ret = stream.read(&mut buffer);
-            let read_n: usize;
-            match read_ret {
-                Ok(n) => read_n = n,
-                Err(e) => return Err(Error::Io(e)),
-            }
-            if read_n == 0 {
-                break;
-            }
-            utf8_buffer.extend_from_slice(&buffer[..read_n]);
+
+        match recv(&mut stream) {
+            Ok(_) => Ok(Client{conn: stream}),
+            Err(e) => Err(e)
         }
-    
-        let back_ret = std::str::from_utf8(&utf8_buffer);
-        let back_str: String;
-        match back_ret {
-            Ok(ret) => back_str = ret.to_string(),
-            Err(e) => return Err(Error::Utf8Err(e)),
+    }
+
+    pub fn get(&mut self, key: String) -> Result<resp::Value, Error> {
+        let arr = resp::Value::Array(vec![
+            resp::Value::BulkStr(String::from("get")),
+            resp::Value::BulkStr(key),
+        ]);
+        
+        match send(&mut self.conn, arr) {
+            Ok(_) => {},
+            Err(e) => return Err(e)
         }
-    
-        match resp::unpack(back_str) {
-            Ok(_) => {
-                Ok(Client{conn: stream})
-            },
-            Err(e) => Err(Error::RespErr(e.to_string()))
+
+        match recv(&mut self.conn) {
+            Ok(response) => Ok(response),
+            Err(e) => Err(e)
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{resp, resp::unpack};
+    use crate::{resp::{self, unpack}, Client};
     use std::{
         collections::{HashMap, HashSet},
         fs, vec,
@@ -221,5 +247,12 @@ mod tests {
             "%1\r\n+abc\r\n*2\r\n$5\r\nhello\r\n:123456\r\n"
         );
         // assert_eq!(resp::pack(resp::Value::Set(HashSet::from([resp::Value::Integer(1), resp::Value::SimpleStr(String::from("xiamingjie"))]))), "~2\r\n:1\r\n+xiamingjie\r\n");
+    }
+
+    #[test]
+    fn connect_and_ping() {
+        let mut cli = Client::build(String::from("127.0.0.1:6379")).unwrap();
+        let ret = cli.get("hello".to_string()).unwrap();
+        assert_eq!(ret, resp::Value::BulkStr("1".to_string()));
     }
 }
