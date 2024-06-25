@@ -51,6 +51,8 @@ where
     }
 }
 
+const CRLF: &str = "\r\n";
+
 #[allow(unused)]
 fn parse(
     raw_msg: &str,
@@ -58,13 +60,12 @@ fn parse(
     next_begin_idx: &mut usize,
 ) -> Result<Value, &'static str> {
     // todo need more specific error info
-    let crlf = "\r\n";
     if let Some(msg_slice) = raw_msg.get(begin_idx..) {
         if let Some(body) = msg_slice
-            .find(crlf)
+            .find(CRLF)
             .and_then(|i| raw_msg.get(begin_idx..begin_idx + i))
         {
-            *next_begin_idx = begin_idx + body.len() + crlf.len();
+            *next_begin_idx = begin_idx + body.len() + CRLF.len();
             if let Some((first_char, rest)) =
                 body.chars().next().map(|c| (c, &body[c.len_utf8()..]))
             {
@@ -83,7 +84,7 @@ fn parse(
                     '$' => {
                         let n = parse_str_to_num::<usize>(rest)?;
                         if let Some(s) = raw_msg.get(*next_begin_idx..*next_begin_idx + n) {
-                            *next_begin_idx = *next_begin_idx + n + crlf.len();
+                            *next_begin_idx = *next_begin_idx + n + CRLF.len();
                             Ok(Value::BulkStr(s.to_string()))
                         } else {
                             Err("not enough str")
