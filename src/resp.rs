@@ -175,3 +175,9 @@ pub fn pack(value: Value) -> String {
         }
     }
 }
+
+#[derive(Debug)]
+pub enum Error {
+    Protocol,
+    IO
+}
