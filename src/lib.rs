@@ -1,8 +1,5 @@
 use std::{
-    io::{Read, Write},
-    net::TcpStream,
-    str::Utf8Error,
-    vec,
+    io::{Read, Write}, net::TcpStream, str::Utf8Error, vec
 };
 
 mod resp;
@@ -11,13 +8,38 @@ mod resp;
 pub enum Error {
     Io(std::io::Error),
     Utf8Err(Utf8Error),
-    RespErr(String),
+    RespErr(resp::ParseError),
+    ServerProto(String)
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Error::RespErr(ref s) => write!(f, "parse resp protocol error: {}", s),
+            Error::Io(ref e) => write!(f, "{}", e),
+            Error::Utf8Err(ref e) => write!(f, "{}", e),
+            Error::ServerProto(ref s) => write!(f, "expected to receivie type: Map, but received type: {}", s)
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match *self {
+            Error::Io(ref e) => Some(e),
+            Error::Utf8Err(ref e) => Some(e),
+            Error::RespErr(ref e) => Some(e),
+            Error::ServerProto(_) => None
+        }
+    }
 }
 
 fn recv(conn: &mut TcpStream) -> Result<resp::Value, Error> {
-    let mut buffer = [0; 1024];
     let mut utf8_buffer = Vec::new();
+
+    let resp_val: Result<resp::Value, Error>;
     loop {
+        let mut buffer = [0; 1024];
         let read_ret = conn.read(&mut buffer);
         let read_n: usize;
         match read_ret {
@@ -25,21 +47,25 @@ fn recv(conn: &mut TcpStream) -> Result<resp::Value, Error> {
             Err(e) => return Err(Error::Io(e)),
         }
         if read_n == 0 {
-            break;
+            return Err(Error::Io(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "connection was closed")));
         }
         utf8_buffer.extend_from_slice(&buffer[..read_n]);
-    }
-
-    let back_ret = std::str::from_utf8(&utf8_buffer);
-    let back_str: String;
-    match back_ret {
-        Ok(ret) => back_str = ret.to_string(),
-        Err(e) => return Err(Error::Utf8Err(e)),
-    }
-
-    match resp::unpack(back_str) {
-        Ok(ret) => Ok(ret),
-        Err(e) => Err(Error::RespErr(e.to_string())),
+        let back_ret = std::str::from_utf8(&utf8_buffer);
+        match back_ret {
+            Ok(str) => {
+                match resp::unpack(str.to_string()) {
+                    Ok(value) => resp_val = Ok(value),
+                    Err(e) => {
+                        match e {
+                            resp::ParseError::Incomplete => continue,
+                            _ => resp_val = Err(Error::RespErr(e))
+                        }
+                    }
+                }
+            },
+            Err(_) => continue,
+        };
+        return resp_val;
     }
 }
 
@@ -52,6 +78,16 @@ fn send(conn: &mut TcpStream, req: resp::Value) -> Result<(), Error> {
 
 pub struct Client {
     conn: TcpStream,
+    srv_info: Server
+}
+
+struct Server {
+    srv_name: String,
+    version: String,
+    proto_ver: i32,
+    id: i32,
+    mode: String,
+    role: String
 }
 
 impl Client {
@@ -63,14 +99,28 @@ impl Client {
             Err(e) => return Err(Error::Io(e)),
         }
 
-        let command = resp::Value::Array(vec![resp::Value::BulkStr(String::from("COMMAND"))]);
+        let command = resp::Value::Array(vec![resp::Value::BulkStr(String::from("hello"))]);
         match send(&mut stream, command) {
             Err(e) => return Err(e),
             Ok(_) => {}
         }
 
         match recv(&mut stream) {
-            Ok(_) => Ok(Client{conn: stream}),
+            Ok(val) => {
+                match val {
+                    resp::Value::Map(mp) => {
+                        Client{
+                            conn: stream,
+                            srv_info: Server{
+                                
+                            }
+                        }
+                    },
+                    _ => {
+                        Err(Error::ServerProto(val.to_string()))
+                    }
+                }
+            },
             Err(e) => Err(e)
         }
     }
@@ -95,10 +145,9 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
-    use crate::{resp::{self, unpack}, Client};
+    use crate::resp::{self, unpack};
     use std::{
-        collections::{HashMap, HashSet},
-        fs, vec,
+        collections::{HashMap, HashSet}, fs, vec
     };
 
     #[test]
@@ -251,7 +300,7 @@ mod tests {
 
     #[test]
     fn connect_and_ping() {
-        let mut cli = Client::build(String::from("127.0.0.1:6379")).unwrap();
+        let mut cli = crate::Client::build(String::from("127.0.0.1:6379")).unwrap();
         let ret = cli.get("hello".to_string()).unwrap();
         assert_eq!(ret, resp::Value::BulkStr("1".to_string()));
     }
